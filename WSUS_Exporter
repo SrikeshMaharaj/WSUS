@@ -1,0 +1,49 @@
+<#==========================================================================
+
+ NAME: WSUS_Exporter.ps1
+
+ AUTHOR: Srikesh Maharaj    
+
+ COMMENT: Exports Status of Specified Update Titles/KBs.  
+          
+
+==========================================================================#>
+
+ppppppFunction GetUpdateState {
+param([string[]]$kbnumber,
+[string]$wsusserver,
+[string]$port
+)
+$report = @()
+[void][reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration")
+$wsus = [Microsoft.UpdateServices.Administration.AdminProxy]::getUpdateServer($wsusserver,$False,8530)
+$CompSc = new-object Microsoft.UpdateServices.Administration.ComputerTargetScope
+$updateScope = new-object Microsoft.UpdateServices.Administration.UpdateScope; 
+$updateScope.UpdateApprovalActions = [Microsoft.UpdateServices.Administration.UpdateApprovalActions]::Install
+foreach ($kb in $kbnumber){ #Loop against each KB number passed to the GetUpdateState function 
+   $updates = $wsus.GetUpdates($updateScope) | ?{$_.Title -match $kb} #Getting every update where the title matches the $kbnumber
+       foreach($update in $updates){ #Loop against the list of updates I stored in $updates in the previous step
+          $update.GetUpdateInstallationInfoPerComputerTarget($CompSc) | ?{$_.UpdateApprovalAction -eq "Install"} |  % { #for the current update
+#Getting the list of computer object IDs where this update is supposed to be installed ($_.UpdateApprovalAction -eq "Install")
+          $Comp = $wsus.GetComputerTarget($_.ComputerTargetId)# using #Computer object ID to retrieve the computer object properties (Name, #IP address)
+
+          $info = "" | select UpdateTitle, LegacyName, SecurityBulletins, Computername, OS ,IpAddress, UpdateInstallationStatus, UpdateApprovalAction #Creating a custom PowerShell object to store the information
+          $info.UpdateTitle = $update.Title
+          $info.LegacyName = $update.LegacyName
+          $info.SecurityBulletins = ($update.SecurityBulletins -join ';')
+          $info.Computername = $Comp.FullDomainName
+          $info.OS = $Comp.OSDescription
+          $info.IpAddress = $Comp.IPAddress
+          $info.UpdateInstallationStatus = $_.UpdateInstallationState
+          $info.UpdateApprovalAction = $_.UpdateApprovalAction
+          $report+=$info # Storing the information into the $report variable 
+        }
+     }
+  }
+$report | ?{$_.UpdateInstallationStatus -ne 'NotApplicable' -and $_.UpdateInstallationStatus -ne 'Unknown' } |  Export-Csv -Path \\local-server-01\Output-Data$\Server_WSUS.csv -Append -NoTypeInformation
+} #Filtering the report to list only computers where the updates are not installed
+
+$202004 = "KB4550929","KB4550964","KB4550917","KB4550961","KB4550738","KB4550994"
+
+
+GetUpdateState -kbnumber $202004 -wsusserver 192.168.0.1 -port 8530 
